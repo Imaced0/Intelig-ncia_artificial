@@ -1,0 +1,109 @@
+name: DevSecOps Avançado
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1) DAST com OWASP ZAP
+  # ---------------------------------------------------------------
+  dast-zap:
+    name: DAST - OWASP ZAP
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # AJUSTE: o Dockerfile deve estar na raiz (ou altere o contexto)
+      - name: Build da imagem Docker
+        run: docker build -t app-local:test .
+
+      # AJUSTE: troque 3000 pela porta que sua aplicação expõe
+      - name: Subir a aplicação em localhost:8080
+        run: |
+          docker run -d --name app -p 8080:3000 app-local:test
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:8080; then
+              echo "Aplicação no ar"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Aplicação não subiu"; docker logs app; exit 1
+
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: "http://localhost:8080"
+          fail_action: true        # bloqueia o build se houver alertas
+          allow_issue_writing: false
+          cmd_options: "-a"
+
+      - name: Upload do relatório ZAP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-zap
+          path: report_html.html
+
+      - name: Parar a aplicação
+        if: always()
+        run: docker rm -f app || true
+
+  # ---------------------------------------------------------------
+  # 2) Privacidade / LGPD com Bearer
+  # ---------------------------------------------------------------
+  privacidade-bearer:
+    name: Privacidade - Bearer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bearer Scan
+        id: bearer
+        uses: bearer/bearer-action@v2
+        with:
+          path: "."
+          format: html
+          output: bearer-report.html
+          severity: critical,high
+          exit-code: 1             # bloqueia o build em falhas críticas/altas
+
+      - name: Upload do relatório Bearer
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-bearer
+          path: bearer-report.html
+
+  # ---------------------------------------------------------------
+  # 3) SBOM CycloneDX com Trivy
+  # ---------------------------------------------------------------
+  sbom-trivy:
+    name: Supply Chain - SBOM (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Gerar SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "cyclonedx"
+          output: "sbom.cdx.json"
+
+      - name: Publicar SBOM como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 30
