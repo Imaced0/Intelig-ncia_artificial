@@ -1,0 +1,61 @@
+name: DevSecOps Avançado
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # 1. Scanner de Privacidade com Bearer
+  bearer-privacy-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+      
+      - name: Executar Bearer Scan
+        uses: bearer/bearer-action@v3
+        with:
+          diff: true
+          exit-code: 1
+
+  # 2. Segurança da Cadeia de Suprimentos (SBOM) com Trivy
+  trivy-sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+      
+      - name: Gerar SBOM com Trivy (CycloneDX)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'cyclonedx'
+          output: 'sbom-cyclonedx.json'
+      
+      - name: Disponibilizar Artefato SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-trivy
+          path: sbom-cyclonedx.json
+
+  # 3. DAST com OWASP ZAP
+  owasp-zap-dast:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Subir aplicação localmente
+        run: |
+          docker compose up -d # Altere para o comando de start do seu projeto
+        
+      - name: Aguardar inicialização
+        run: sleep 15
+
+      - name: Executar OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: 'http://localhost:8080' # Altere para a porta da sua aplicação
+          fail_action: true
